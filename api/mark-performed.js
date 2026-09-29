@@ -526,16 +526,6 @@ export default async function handler(req, res) {
                 const richText =
                   block[block.type]?.rich_text || [];
             
-                return (
-                  richTextToPlain(richText).trim() === "..."
-                );
-              });
-
-            const versionAnchor =
-              existingVersions.find(block => {
-                const richText =
-                  block[block.type]?.rich_text || [];
-            
                 const text =
                   richTextToPlain(richText).trim();
             
