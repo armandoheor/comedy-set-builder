@@ -522,23 +522,14 @@ export default async function handler(req, res) {
               );
 
             const versionAnchor =
-              existingVersions.find(
-                block => {
-                  if (
-                    block.type !==
-                    "paragraph"
-                  ) {
-                    return false;
-                  }
-
-                  return (
-                    richTextToPlain(
-                      block.paragraph
-                        ?.rich_text
-                    ).trim() === "..."
-                  );
-                }
-              );
+              existingVersions.find(block => {
+                const richText =
+                  block[block.type]?.rich_text || [];
+            
+                return (
+                  richTextToPlain(richText).trim() === "..."
+                );
+              });
 
             if (!versionAnchor) {
               throw new Error(
