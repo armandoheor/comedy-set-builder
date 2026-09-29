@@ -50,11 +50,19 @@ export default async function handler(req, res) {
         method: "POST",
         headers,
         body: JSON.stringify({
-          query: "SETS",
           filter: {
-            property: "object",
-            value: "data_source"
-          }
+            property: "Populate",
+            checkbox: {
+              equals: true
+            }
+          },
+          sorts: [
+            {
+              timestamp: "created_time",
+              direction: "descending"
+            }
+          ],
+          page_size: 1
         })
       }
     );
@@ -105,12 +113,6 @@ export default async function handler(req, res) {
     if (queryData.results.length === 0) {
       return res.status(400).json({
         error: "No Set is marked for population."
-      });
-    }
-
-    if (queryData.results.length > 1) {
-      return res.status(409).json({
-        error: "More than one Set is marked for population. Uncheck Populate on the extras."
       });
     }
 
@@ -242,20 +244,45 @@ export default async function handler(req, res) {
       return res.status(writeResponse.status).json(writeData);
     }
 
-    // Clear Populate so this Set won't be selected again
-    const clearResponse = await fetch(
-      `https://api.notion.com/v1/pages/${setId}`,
+    // Find all Sets still marked Populate = checked
+    const pendingResponse = await fetch(
+      `https://api.notion.com/v1/data_sources/${setsDataSource.id}/query`,
       {
-        method: "PATCH",
+        method: "POST",
         headers,
         body: JSON.stringify({
-          properties: {
-            Populate: {
-              checkbox: false
+          filter: {
+            property: "Populate",
+            checkbox: {
+              equals: true
             }
-          }
+          },
+          page_size: 100
         })
       }
+    );
+    
+    const pendingData = await pendingResponse.json();
+    
+    if (!pendingResponse.ok) {
+      return res.status(pendingResponse.status).json(pendingData);
+    }
+    
+    // Clear Populate on all of them
+    await Promise.all(
+      pendingData.results.map(page =>
+        fetch(`https://api.notion.com/v1/pages/${page.id}`, {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify({
+            properties: {
+              Populate: {
+                checkbox: false
+              }
+            }
+          })
+        })
+      )
     );
 
     const clearData = await clearResponse.json();
