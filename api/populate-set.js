@@ -13,15 +13,15 @@ function scriptToParagraphs(script) {
 
   return script
     .split(/\n\s*\n/)
-    .map(paragraph => paragraph.trim())
+    .map(p => p.trim())
     .filter(Boolean)
-    .map(paragraph => ({
+    .map(p => ({
       object: "block",
       type: "paragraph",
       paragraph: {
         rich_text: [{
           type: "text",
-          text: { content: paragraph }
+          text: { content: p }
         }]
       }
     }));
@@ -29,14 +29,11 @@ function scriptToParagraphs(script) {
 
 export default async function handler(req, res) {
   const token = process.env.NOTION_TOKEN;
-  const { setId } = req.query;
 
   if (!token) {
-    return res.status(500).json({ error: "NOTION_TOKEN is not configured" });
-  }
-
-  if (!setId) {
-    return res.status(400).json({ error: "Missing setId" });
+    return res.status(500).json({
+      error: "NOTION_TOKEN is not configured"
+    });
   }
 
   const headers = {
@@ -46,28 +43,96 @@ export default async function handler(req, res) {
   };
 
   try {
-    // Get Set page
-    const setResponse = await fetch(
-      `https://api.notion.com/v1/pages/${setId}`,
-      { headers }
+    // Find the SETS data source
+    const searchResponse = await fetch(
+      "https://api.notion.com/v1/search",
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          query: "SETS",
+          filter: {
+            property: "object",
+            value: "data_source"
+          }
+        })
+      }
     );
 
-    const set = await setResponse.json();
+    const searchData = await searchResponse.json();
 
-    if (!setResponse.ok) {
-      return res.status(setResponse.status).json(set);
+    if (!searchResponse.ok) {
+      return res.status(searchResponse.status).json(searchData);
     }
 
-    const bitIds =
-      set.properties?.Bits?.relation?.map(item => item.id) || [];
+    const setsDataSource = searchData.results.find(item => {
+      const title =
+        item.title?.map(t => t.plain_text).join("") || "";
 
-    if (!bitIds.length) {
-      return res.status(400).json({
-        error: "This Set has no related Bits."
+      return title === "SETS";
+    });
+
+    if (!setsDataSource) {
+      return res.status(404).json({
+        error: "Could not find SETS."
       });
     }
 
-    // Find the divider immediately following SETLIST
+    // Find a Set requesting population
+    const queryResponse = await fetch(
+      `https://api.notion.com/v1/data_sources/${setsDataSource.id}/query`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          filter: {
+            property: "Populate",
+            checkbox: {
+              equals: true
+            }
+          },
+          page_size: 2
+        })
+      }
+    );
+
+    const queryData = await queryResponse.json();
+
+    if (!queryResponse.ok) {
+      return res.status(queryResponse.status).json(queryData);
+    }
+
+    if (queryData.results.length === 0) {
+      return res.status(400).json({
+        error: "No Set is marked for population."
+      });
+    }
+
+    if (queryData.results.length > 1) {
+      return res.status(409).json({
+        error: "More than one Set is marked for population. Uncheck Populate on the extras."
+      });
+    }
+
+    const set = queryData.results[0];
+    const setId = set.id;
+
+    const setName =
+      set.properties?.Set?.title
+        ?.map(item => item.plain_text)
+        .join("") || "Set";
+
+    const bitIds =
+      set.properties?.Bits?.relation
+        ?.map(item => item.id) || [];
+
+    if (!bitIds.length) {
+      return res.status(400).json({
+        error: `${setName} has no related Bits.`
+      });
+    }
+
+    // Find SETLIST heading
     const blocksResponse = await fetch(
       `https://api.notion.com/v1/blocks/${setId}/children?page_size=100`,
       { headers }
@@ -98,17 +163,7 @@ export default async function handler(req, res) {
       });
     }
 
-    const divider = blocks
-      .slice(setlistIndex + 1)
-      .find(block => block.type === "divider");
-
-    if (!divider) {
-      return res.status(400).json({
-        error: "Could not find the divider after SETLIST."
-      });
-    }
-
-    // Retrieve related Bits
+    // Retrieve Bits
     const bits = await Promise.all(
       bitIds.map(async id => {
         const response = await fetch(
@@ -139,9 +194,10 @@ export default async function handler(req, res) {
       })
     );
 
-    // Build toggles
+    // Build toggle blocks
     const children = bits.map(bit => {
       const duration = formatDuration(bit.duration);
+
       const title = duration
         ? `${bit.bit} — ${duration}`
         : bit.bit;
@@ -167,7 +223,7 @@ export default async function handler(req, res) {
       };
     });
 
-    // Insert immediately before the divider
+    // Insert immediately after SETLIST
     const writeResponse = await fetch(
       `https://api.notion.com/v1/blocks/${setId}/children`,
       {
@@ -180,15 +236,38 @@ export default async function handler(req, res) {
       }
     );
 
-    const result = await writeResponse.json();
+    const writeData = await writeResponse.json();
 
     if (!writeResponse.ok) {
-      return res.status(writeResponse.status).json(result);
+      return res.status(writeResponse.status).json(writeData);
+    }
+
+    // Clear Populate so this Set won't be selected again
+    const clearResponse = await fetch(
+      `https://api.notion.com/v1/pages/${setId}`,
+      {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({
+          properties: {
+            Populate: {
+              checkbox: false
+            }
+          }
+        })
+      }
+    );
+
+    const clearData = await clearResponse.json();
+
+    if (!clearResponse.ok) {
+      return res.status(clearResponse.status).json(clearData);
     }
 
     return res.status(200).json({
       ok: true,
-      message: `Added ${bits.length} Bits under SETLIST.`,
+      set: setName,
+      message: `Populated ${bits.length} Bits.`,
       bits: bits.map(bit => bit.bit)
     });
 
