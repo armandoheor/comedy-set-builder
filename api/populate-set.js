@@ -260,6 +260,11 @@ export default async function handler(req, res) {
       })
     );
 
+    const totalDuration = bits.reduce(
+      (total, bit) => total + (bit.duration || 0),
+      0
+    );
+
     /*
      * 5. Convert the Bits into real Notion toggle blocks.
      */
@@ -344,6 +349,28 @@ export default async function handler(req, res) {
 
     if (!pendingResponse.ok) {
       return res.status(pendingResponse.status).json(pendingData);
+    }
+
+    // Update Set metadata
+    const metadataResponse = await fetch(
+      `https://api.notion.com/v1/pages/${setId}`,
+      {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({
+          properties: {
+            "Total Duration": {
+              number: totalDuration
+            }
+          }
+        })
+      }
+    );
+    
+    const metadataData = await metadataResponse.json();
+    
+    if (!metadataResponse.ok) {
+      return res.status(metadataResponse.status).json(metadataData);
     }
 
     /*
