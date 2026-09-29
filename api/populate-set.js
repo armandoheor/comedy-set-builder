@@ -175,7 +175,7 @@ export default async function handler(req, res) {
         headers,
         body: JSON.stringify({
           children,
-          insert_before: divider.id
+          after: blocks[setlistIndex].id
         })
       }
     );
