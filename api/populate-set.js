@@ -204,10 +204,26 @@ export default async function handler(req, res) {
     );
     
     if (existingContent.length > 0) {
-      return res.status(409).json({
-        error: "This Set already has a populated SETLIST."
-      });
-    }
+    // Clear Populate on this Set before returning
+    await fetch(
+      `https://api.notion.com/v1/pages/${setId}`,
+      {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({
+          properties: {
+            Populate: {
+              checkbox: false
+            }
+          }
+        })
+      }
+    );
+  
+    return res.status(409).json({
+      error: "This Set already has a populated SETLIST."
+    });
+  }
 
     /*
      * 4. Retrieve every related Bit.
