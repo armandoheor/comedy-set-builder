@@ -85,7 +85,7 @@ export default async function handler(req, res) {
     }
 
     /*
-     * 2. Find the newest Set where Populate is checked.
+     * 2. Find the newest Set where Sync is checked.
      */
     const queryResponse = await fetch(
       `https://api.notion.com/v1/data_sources/${setsDataSource.id}/query`,
@@ -94,7 +94,7 @@ export default async function handler(req, res) {
         headers,
         body: JSON.stringify({
           filter: {
-            property: "Populate",
+            property: "Sync",
             checkbox: {
               equals: true
             }
@@ -118,7 +118,7 @@ export default async function handler(req, res) {
 
     if (queryData.results.length === 0) {
       return res.status(400).json({
-        error: "No Set is marked for population."
+        error: "No Set is marked for Sync."
       });
     }
 
@@ -384,7 +384,7 @@ export default async function handler(req, res) {
     );
 
     /*
-     * 8. Save Bit Map + Duration + clear Populate
+     * 8. Save Bit Map + Duration + clear Sync
      * in ONE Set update.
      */
     const metadataResponse = await fetch(
@@ -409,7 +409,7 @@ export default async function handler(req, res) {
               number: totalDuration
             },
 
-            Populate: {
+            Sync: {
               checkbox: false
             }
           }
