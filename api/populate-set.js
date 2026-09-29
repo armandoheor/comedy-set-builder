@@ -359,7 +359,7 @@ export default async function handler(req, res) {
         headers,
         body: JSON.stringify({
           properties: {
-            "Total Duration": {
+            "Duration": {
               number: totalDuration
             }
           }
