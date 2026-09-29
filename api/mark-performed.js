@@ -110,6 +110,63 @@ function blocksToScript(blocks) {
     .trim();
 }
 
+function formatDuration(minutes) {
+  if (minutes == null) return "";
+
+  const totalSeconds = Math.round(minutes * 60);
+  const mins = Math.floor(totalSeconds / 60);
+  const secs = totalSeconds % 60;
+
+  return `${mins}:${String(secs).padStart(2, "0")}`;
+}
+
+function formatVersionDate(dateString) {
+  if (!dateString) return "Unknown date";
+
+  const [year, month, day] = dateString.split("-").map(Number);
+
+  const date = new Date(Date.UTC(year, month - 1, day));
+
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC"
+  });
+}
+
+function scriptToParagraphBlocks(script) {
+  if (!script) {
+    return [
+      {
+        object: "block",
+        type: "paragraph",
+        paragraph: {
+          rich_text: []
+        }
+      }
+    ];
+  }
+
+  return script
+    .split(/\n\s*\n/)
+    .map(p => p.trim())
+    .filter(Boolean)
+    .map(p => ({
+      object: "block",
+      type: "paragraph",
+      paragraph: {
+        rich_text: [
+          {
+            type: "text",
+            text: {
+              content: p
+            }
+          }
+        ]
+      }
+    }));
+}
+
 export default async function handler(req, res) {
   const token = process.env.NOTION_TOKEN;
 
@@ -442,6 +499,214 @@ export default async function handler(req, res) {
     );
 
     /*
+     * 6. VERSION WRITE TEST
+     *
+     * Creates historical versions for changed Bits.
+     * DOES NOT update the canonical Bit.
+     */
+    const versionsCreated = [];
+    
+    for (const item of report) {
+      if (!item.would_create_version) {
+        continue;
+      }
+    
+      const bitId = item.bit_id;
+    
+      /*
+       * Get the Bit page's top-level blocks and find VERSIONS.
+       */
+      const bitBlocks = await getAllBlockChildren(
+        bitId,
+        headers
+      );
+    
+      const versionsBlock = bitBlocks.find(block => {
+        if (
+          block.type !== "heading_1" &&
+          block.type !== "heading_2" &&
+          block.type !== "heading_3" &&
+          block.type !== "toggle"
+        ) {
+          return false;
+        }
+    
+        const richText =
+          block[block.type]?.rich_text || [];
+    
+        return (
+          richTextToPlain(richText)
+            .trim()
+            .toUpperCase() === "VERSIONS"
+        );
+      });
+    
+      if (!versionsBlock) {
+        return res.status(400).json({
+          error:
+            `Could not find VERSIONS on Bit "${item.current.title}".`,
+          dry_run: false
+        });
+      }
+    
+      /*
+       * Read existing versions.
+       */
+      const existingVersions =
+        await getAllBlockChildren(
+          versionsBlock.id,
+          headers
+        );
+    
+      /*
+       * Determine highest existing vN.
+       */
+      let highestVersion = 0;
+    
+      for (const block of existingVersions) {
+        if (block.type !== "toggle") {
+          continue;
+        }
+    
+        const text =
+          richTextToPlain(
+            block.toggle?.rich_text
+          ).trim();
+    
+        const match = text.match(/^v(\d+)\b/i);
+    
+        if (match) {
+          highestVersion = Math.max(
+            highestVersion,
+            Number(match[1])
+          );
+        }
+      }
+    
+      const nextVersion =
+        highestVersion + 1;
+    
+      /*
+       * Resolve the OLD Last Performed Set name.
+       */
+      let oldSetName = null;
+    
+      if (item.current.last_performed_set) {
+        const oldSetResponse = await fetch(
+          `https://api.notion.com/v1/pages/${item.current.last_performed_set}`,
+          {
+            headers
+          }
+        );
+    
+        const oldSetPage =
+          await oldSetResponse.json();
+    
+        if (oldSetResponse.ok) {
+          oldSetName =
+            richTextToPlain(
+              oldSetPage.properties?.Set?.title
+            ) || null;
+        }
+      }
+    
+      /*
+       * Build compact version title.
+       */
+      const titleParts = [
+        `v${nextVersion}`,
+        formatVersionDate(
+          item.current.last_performed
+        )
+      ];
+    
+      if (oldSetName) {
+        titleParts.push(oldSetName);
+      }
+    
+      /*
+       * Include OLD title only if title changed.
+       */
+      if (item.changes.title) {
+        titleParts.push(
+          item.current.title || "Untitled Bit"
+        );
+      }
+    
+      /*
+       * Include OLD duration only if duration changed.
+       */
+      if (item.changes.duration) {
+        const oldDuration =
+          formatDuration(
+            item.current.duration
+          );
+    
+        if (oldDuration) {
+          titleParts.push(oldDuration);
+        }
+      }
+    
+      const versionTitle =
+        titleParts.join(" — ");
+    
+      /*
+       * Build the new version toggle.
+       */
+      const versionBlock = {
+        object: "block",
+        type: "toggle",
+        toggle: {
+          rich_text: [
+            {
+              type: "text",
+              text: {
+                content: versionTitle
+              }
+            }
+          ],
+    
+          children:
+            scriptToParagraphBlocks(
+              item.current.script
+            )
+        }
+      };
+    
+      /*
+       * Insert newest version at the TOP of VERSIONS.
+       *
+       * If existing versions exist, append normally first.
+       * We'll verify visual ordering in this test before
+       * making the final production implementation.
+       */
+      const versionResponse = await fetch(
+        `https://api.notion.com/v1/blocks/${versionsBlock.id}/children`,
+        {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify({
+            children: [versionBlock]
+          })
+        }
+      );
+    
+      const versionData =
+        await versionResponse.json();
+    
+      if (!versionResponse.ok) {
+        return res
+          .status(versionResponse.status)
+          .json(versionData);
+      }
+    
+      versionsCreated.push({
+        bit: item.current.title,
+        version: versionTitle
+      });
+    }
+
+    /*
      * 6. Summary.
      */
     const changedBits =
@@ -469,8 +734,10 @@ export default async function handler(req, res) {
 
       bits: report,
 
+      versions_created: versionsCreated,
+
       message:
-        "DRY RUN ONLY — no Bits or version history were changed."
+        "VERSION WRITE TEST — historical versions were created, but canonical Bits were NOT updated."
     });
 
   } catch (error) {
