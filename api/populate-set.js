@@ -300,20 +300,46 @@ export default async function handler(req, res) {
       }
 
       /*
-       * The returned blocks correspond to newBits in the same order.
-       * Save Bit page ID -> toggle block ID.
+       * Re-read the Set after creating the toggles so we can get
+       * the actual top-level toggle block IDs.
        */
-      const createdBlocks = writeData.results || [];
-
-      if (createdBlocks.length !== newBits.length) {
+      const refreshedResponse = await fetch(
+        `https://api.notion.com/v1/blocks/${setId}/children?page_size=100`,
+        {
+          headers
+        }
+      );
+      
+      const refreshedData = await refreshedResponse.json();
+      
+      if (!refreshedResponse.ok) {
+        return res.status(refreshedResponse.status).json(refreshedData);
+      }
+      
+      /*
+       * Because the new toggles were inserted immediately after SETLIST,
+       * take the first N toggle blocks after SETLIST.
+       */
+      const refreshedBlocks = refreshedData.results;
+      
+      const refreshedSetlistIndex = refreshedBlocks.findIndex(
+        block => block.id === setlistBlock.id
+      );
+      
+      const createdToggles = refreshedBlocks
+        .slice(refreshedSetlistIndex + 1)
+        .filter(block => block.type === "toggle")
+        .slice(0, newBits.length);
+      
+      if (createdToggles.length !== newBits.length) {
         return res.status(500).json({
           error:
-            "Setlist blocks were created, but their IDs could not be mapped reliably."
+            "Setlist was created, but the new toggle block IDs could not be identified."
         });
       }
-
+      
       newBits.forEach((bit, index) => {
-        bitMap[bit.id] = createdBlocks[index].id;
+        bitMap[bit.id] = createdToggles[index].id;
       });
     }
 
