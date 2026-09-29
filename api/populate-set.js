@@ -19,10 +19,14 @@ function scriptToParagraphs(script) {
       object: "block",
       type: "paragraph",
       paragraph: {
-        rich_text: [{
-          type: "text",
-          text: { content: p }
-        }]
+        rich_text: [
+          {
+            type: "text",
+            text: {
+              content: p
+            }
+          }
+        ]
       }
     }));
 }
@@ -43,26 +47,20 @@ export default async function handler(req, res) {
   };
 
   try {
-    // Find the SETS data source
+    /*
+     * 1. Find the SETS data source.
+     */
     const searchResponse = await fetch(
       "https://api.notion.com/v1/search",
       {
         method: "POST",
         headers,
         body: JSON.stringify({
+          query: "SETS",
           filter: {
-            property: "Populate",
-            checkbox: {
-              equals: true
-            }
-          },
-          sorts: [
-            {
-              timestamp: "created_time",
-              direction: "descending"
-            }
-          ],
-          page_size: 1
+            property: "object",
+            value: "data_source"
+          }
         })
       }
     );
@@ -86,7 +84,9 @@ export default async function handler(req, res) {
       });
     }
 
-    // Find a Set requesting population
+    /*
+     * 2. Find the newest Set where Populate is checked.
+     */
     const queryResponse = await fetch(
       `https://api.notion.com/v1/data_sources/${setsDataSource.id}/query`,
       {
@@ -99,7 +99,13 @@ export default async function handler(req, res) {
               equals: true
             }
           },
-          page_size: 2
+          sorts: [
+            {
+              timestamp: "created_time",
+              direction: "descending"
+            }
+          ],
+          page_size: 1
         })
       }
     );
@@ -134,10 +140,14 @@ export default async function handler(req, res) {
       });
     }
 
-    // Find SETLIST heading
+    /*
+     * 3. Find the SETLIST heading in the Set page.
+     */
     const blocksResponse = await fetch(
       `https://api.notion.com/v1/blocks/${setId}/children?page_size=100`,
-      { headers }
+      {
+        headers
+      }
     );
 
     const blocksData = await blocksResponse.json();
@@ -149,7 +159,9 @@ export default async function handler(req, res) {
     const blocks = blocksData.results;
 
     const setlistIndex = blocks.findIndex(block => {
-      if (block.type !== "heading_2") return false;
+      if (block.type !== "heading_2") {
+        return false;
+      }
 
       const text =
         block.heading_2?.rich_text
@@ -165,12 +177,18 @@ export default async function handler(req, res) {
       });
     }
 
-    // Retrieve Bits
+    const setlistBlock = blocks[setlistIndex];
+
+    /*
+     * 4. Retrieve every related Bit.
+     */
     const bits = await Promise.all(
       bitIds.map(async id => {
         const response = await fetch(
           `https://api.notion.com/v1/pages/${id}`,
-          { headers }
+          {
+            headers
+          }
         );
 
         const page = await response.json();
@@ -196,7 +214,9 @@ export default async function handler(req, res) {
       })
     );
 
-    // Build toggle blocks
+    /*
+     * 5. Convert the Bits into real Notion toggle blocks.
+     */
     const children = bits.map(bit => {
       const duration = formatDuration(bit.duration);
 
@@ -210,22 +230,32 @@ export default async function handler(req, res) {
         object: "block",
         type: "toggle",
         toggle: {
-          rich_text: [{
-            type: "text",
-            text: { content: title }
-          }],
+          rich_text: [
+            {
+              type: "text",
+              text: {
+                content: title
+              }
+            }
+          ],
           children: paragraphs.length
             ? paragraphs
-            : [{
-                object: "block",
-                type: "paragraph",
-                paragraph: { rich_text: [] }
-              }]
+            : [
+                {
+                  object: "block",
+                  type: "paragraph",
+                  paragraph: {
+                    rich_text: []
+                  }
+                }
+              ]
         }
       };
     });
 
-    // Insert immediately after SETLIST
+    /*
+     * 6. Insert the toggles immediately after SETLIST.
+     */
     const writeResponse = await fetch(
       `https://api.notion.com/v1/blocks/${setId}/children`,
       {
@@ -233,7 +263,7 @@ export default async function handler(req, res) {
         headers,
         body: JSON.stringify({
           children,
-          after: blocks[setlistIndex].id
+          after: setlistBlock.id
         })
       }
     );
@@ -244,7 +274,9 @@ export default async function handler(req, res) {
       return res.status(writeResponse.status).json(writeData);
     }
 
-    // Find all Sets still marked Populate = checked
+    /*
+     * 7. Find ALL Sets where Populate is still checked.
+     */
     const pendingResponse = await fetch(
       `https://api.notion.com/v1/data_sources/${setsDataSource.id}/query`,
       {
@@ -261,36 +293,52 @@ export default async function handler(req, res) {
         })
       }
     );
-    
+
     const pendingData = await pendingResponse.json();
-    
+
     if (!pendingResponse.ok) {
       return res.status(pendingResponse.status).json(pendingData);
     }
-    
-    // Clear Populate on all of them
-    await Promise.all(
+
+    /*
+     * 8. Clear Populate on all of those Sets.
+     */
+    const clearResponses = await Promise.all(
       pendingData.results.map(page =>
-        fetch(`https://api.notion.com/v1/pages/${page.id}`, {
-          method: "PATCH",
-          headers,
-          body: JSON.stringify({
-            properties: {
-              Populate: {
-                checkbox: false
+        fetch(
+          `https://api.notion.com/v1/pages/${page.id}`,
+          {
+            method: "PATCH",
+            headers,
+            body: JSON.stringify({
+              properties: {
+                Populate: {
+                  checkbox: false
+                }
               }
-            }
-          })
-        })
+            })
+          }
+        )
       )
     );
 
-    const clearData = await clearResponse.json();
+    /*
+     * Make sure every checkbox update succeeded.
+     */
+    for (const response of clearResponses) {
+      if (!response.ok) {
+        const errorData = await response.json();
 
-    if (!clearResponse.ok) {
-      return res.status(clearResponse.status).json(clearData);
+        return res.status(response.status).json({
+          error: "Set was populated, but a Populate checkbox could not be cleared.",
+          notion: errorData
+        });
+      }
     }
 
+    /*
+     * 9. Success.
+     */
     return res.status(200).json({
       ok: true,
       set: setName,
