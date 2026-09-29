@@ -13,23 +13,14 @@ function normalizeScript(text) {
 function parseToggleTitle(text) {
   const value = (text || "").trim();
 
-  /*
-   * Expected:
-   * TITLE — 2:30
-   *
-   * Duration is optional so a Bit without a duration still works.
-   */
-  const match = value.match(/^(.*?)(?:\s+—\s+(\d+):(\d{1,2}))?$/);
+  const match =
+    value.match(/^(.*?)(?:\s+—\s+(\d+):(\d{1,2}))?$/);
 
-  if (!match) {
-    return null;
-  }
+  if (!match) return null;
 
   const title = match[1].trim();
 
-  if (!title) {
-    return null;
-  }
+  if (!title) return null;
 
   let duration = null;
 
@@ -95,12 +86,6 @@ async function getAllBlockChildren(blockId, headers) {
 }
 
 function blocksToScript(blocks) {
-  /*
-   * For now we expect the scripts created by Sync Setlist:
-   * paragraph blocks containing plain text.
-   *
-   * Blank paragraphs are preserved as paragraph separators.
-   */
   return blocks
     .filter(block => block.type === "paragraph")
     .map(block =>
@@ -123,9 +108,11 @@ function formatDuration(minutes) {
 function formatVersionDate(dateString) {
   if (!dateString) return "Unknown date";
 
-  const [year, month, day] = dateString.split("-").map(Number);
+  const [year, month, day] =
+    dateString.split("-").map(Number);
 
-  const date = new Date(Date.UTC(year, month - 1, day));
+  const date =
+    new Date(Date.UTC(year, month - 1, day));
 
   return date.toLocaleDateString("en-US", {
     month: "short",
@@ -201,18 +188,24 @@ export default async function handler(req, res) {
       }
     );
 
-    const searchData = await searchResponse.json();
+    const searchData =
+      await searchResponse.json();
 
     if (!searchResponse.ok) {
-      return res.status(searchResponse.status).json(searchData);
+      return res
+        .status(searchResponse.status)
+        .json(searchData);
     }
 
-    const setsDataSource = searchData.results.find(item => {
-      const title =
-        item.title?.map(t => t.plain_text).join("") || "";
+    const setsDataSource =
+      searchData.results.find(item => {
+        const title =
+          item.title
+            ?.map(t => t.plain_text)
+            .join("") || "";
 
-      return title === "SETS";
-    });
+        return title === "SETS";
+      });
 
     if (!setsDataSource) {
       return res.status(404).json({
@@ -246,10 +239,13 @@ export default async function handler(req, res) {
       }
     );
 
-    const queryData = await queryResponse.json();
+    const queryData =
+      await queryResponse.json();
 
     if (!queryResponse.ok) {
-      return res.status(queryResponse.status).json(queryData);
+      return res
+        .status(queryResponse.status)
+        .json(queryData);
     }
 
     if (!queryData.results.length) {
@@ -262,11 +258,13 @@ export default async function handler(req, res) {
     const setId = set.id;
 
     const setName =
-      richTextToPlain(set.properties?.Set?.title) ||
-      "Untitled Set";
+      richTextToPlain(
+        set.properties?.Set?.title
+      ) || "Untitled Set";
 
     const setDate =
-      set.properties?.Date?.date?.start || null;
+      set.properties?.Date?.date?.start ||
+      null;
 
     if (!setDate) {
       return res.status(400).json({
@@ -284,7 +282,8 @@ export default async function handler(req, res) {
 
     if (!bitMapText) {
       return res.status(400).json({
-        error: `${setName} has no Bit Map. Sync the Set first.`
+        error:
+          `${setName} has no Bit Map. Sync the Set first.`
       });
     }
 
@@ -298,7 +297,8 @@ export default async function handler(req, res) {
       });
     }
 
-    const mappings = Object.entries(bitMap);
+    const mappings =
+      Object.entries(bitMap);
 
     if (!mappings.length) {
       return res.status(400).json({
@@ -307,16 +307,19 @@ export default async function handler(req, res) {
     }
 
     /*
-     * 4. Validate relation against Bit Map.
+     * 4. Validate Set relation against Bit Map.
      */
     const relatedBitIds =
       set.properties?.Bits?.relation
         ?.map(item => item.id) || [];
 
-    const mappedBitIds = Object.keys(bitMap);
+    const mappedBitIds =
+      Object.keys(bitMap);
 
     const unmappedRelatedBits =
-      relatedBitIds.filter(id => !bitMap[id]);
+      relatedBitIds.filter(
+        id => !bitMap[id]
+      );
 
     const mappedButUnrelatedBits =
       mappedBitIds.filter(
@@ -335,388 +338,595 @@ export default async function handler(req, res) {
           unmappedRelatedBits,
 
         mapped_without_relation:
-          mappedButUnrelatedBits,
-
-        dry_run: true
+          mappedButUnrelatedBits
       });
     }
 
     /*
-     * 5. Inspect every mapped Bit + toggle.
+     * 5. READ + VALIDATE EVERYTHING FIRST.
      *
-     * Nothing is modified.
+     * No writes occur in this stage.
      */
     const report = await Promise.all(
-      mappings.map(async ([bitId, toggleId]) => {
-        /*
-         * Retrieve canonical Bit.
-         */
-        const bitResponse = await fetch(
-          `https://api.notion.com/v1/pages/${bitId}`,
-          {
-            headers
+      mappings.map(
+        async ([bitId, toggleId]) => {
+          /*
+           * Canonical Bit.
+           */
+          const bitResponse = await fetch(
+            `https://api.notion.com/v1/pages/${bitId}`,
+            {
+              headers
+            }
+          );
+
+          const bitPage =
+            await bitResponse.json();
+
+          if (!bitResponse.ok) {
+            throw new Error(
+              `Could not retrieve mapped Bit ${bitId}`
+            );
           }
-        );
 
-        const bitPage = await bitResponse.json();
-
-        if (!bitResponse.ok) {
-          throw new Error(
-            `Could not retrieve mapped Bit ${bitId}`
+          /*
+           * Set toggle.
+           */
+          const toggleResponse = await fetch(
+            `https://api.notion.com/v1/blocks/${toggleId}`,
+            {
+              headers
+            }
           );
-        }
 
-        /*
-         * Retrieve mapped toggle itself.
-         */
-        const toggleResponse = await fetch(
-          `https://api.notion.com/v1/blocks/${toggleId}`,
-          {
-            headers
+          const toggle =
+            await toggleResponse.json();
+
+          if (!toggleResponse.ok) {
+            throw new Error(
+              `Could not retrieve mapped toggle ${toggleId}`
+            );
           }
-        );
 
-        const toggle = await toggleResponse.json();
+          if (
+            toggle.archived ||
+            toggle.in_trash
+          ) {
+            throw new Error(
+              `Mapped toggle ${toggleId} has been deleted.`
+            );
+          }
 
-        if (!toggleResponse.ok) {
-          throw new Error(
-            `Could not retrieve mapped toggle ${toggleId}`
-          );
-        }
+          if (toggle.type !== "toggle") {
+            throw new Error(
+              `Mapped block ${toggleId} is no longer a toggle.`
+            );
+          }
 
-        if (toggle.archived || toggle.in_trash) {
-          throw new Error(
-            `Mapped toggle ${toggleId} has been deleted.`
-          );
-        }
+          const toggleTitle =
+            richTextToPlain(
+              toggle.toggle?.rich_text
+            );
 
-        if (toggle.type !== "toggle") {
-          throw new Error(
-            `Mapped block ${toggleId} is no longer a toggle.`
-          );
-        }
+          const parsed =
+            parseToggleTitle(toggleTitle);
 
-        const toggleTitle =
-          richTextToPlain(toggle.toggle?.rich_text);
+          if (!parsed) {
+            throw new Error(
+              `Could not parse setlist title: "${toggleTitle}"`
+            );
+          }
 
-        const parsed =
-          parseToggleTitle(toggleTitle);
+          const toggleChildren =
+            await getAllBlockChildren(
+              toggleId,
+              headers
+            );
 
-        if (!parsed) {
-          throw new Error(
-            `Could not parse setlist title: "${toggleTitle}"`
-          );
-        }
+          const performedScript =
+            blocksToScript(
+              toggleChildren
+            );
 
-        /*
-         * Read the current contents of the working Set toggle.
-         */
-        const toggleChildren =
-          await getAllBlockChildren(
+          /*
+           * Canonical values.
+           */
+          const currentTitle =
+            richTextToPlain(
+              bitPage.properties?.Bit?.title
+            );
+
+          const currentDuration =
+            bitPage.properties
+              ?.Duration?.number ?? null;
+
+          const currentScript =
+            richTextToPlain(
+              bitPage.properties
+                ?.Script?.rich_text
+            );
+
+          const lastPerformed =
+            bitPage.properties
+              ?.["Last Performed"]
+              ?.date?.start || null;
+
+          const lastPerformedSet =
+            bitPage.properties
+              ?.["Last Performed Set"]
+              ?.relation?.[0]?.id || null;
+
+          const titleChanged =
+            currentTitle !== parsed.title;
+
+          const durationChanged =
+            currentDuration !==
+            parsed.duration;
+
+          const scriptChanged =
+            normalizeScript(currentScript) !==
+            normalizeScript(performedScript);
+
+          const contentChanged =
+            titleChanged ||
+            durationChanged ||
+            scriptChanged;
+
+          /*
+           * If a version will be required,
+           * validate VERSIONS + anchor NOW,
+           * before anything is written.
+           */
+          let versionInfo = null;
+
+          if (contentChanged) {
+            const bitBlocks =
+              await getAllBlockChildren(
+                bitId,
+                headers
+              );
+
+            const versionsBlock =
+              bitBlocks.find(block => {
+                if (
+                  block.type !== "heading_1" &&
+                  block.type !== "heading_2" &&
+                  block.type !== "heading_3" &&
+                  block.type !== "toggle"
+                ) {
+                  return false;
+                }
+
+                const richText =
+                  block[block.type]
+                    ?.rich_text || [];
+
+                return (
+                  richTextToPlain(richText)
+                    .trim()
+                    .toUpperCase() ===
+                  "VERSIONS"
+                );
+              });
+
+            if (!versionsBlock) {
+              throw new Error(
+                `Could not find VERSIONS on Bit "${currentTitle}".`
+              );
+            }
+
+            const existingVersions =
+              await getAllBlockChildren(
+                versionsBlock.id,
+                headers
+              );
+
+            const versionAnchor =
+              existingVersions.find(
+                block => {
+                  if (
+                    block.type !==
+                    "paragraph"
+                  ) {
+                    return false;
+                  }
+
+                  return (
+                    richTextToPlain(
+                      block.paragraph
+                        ?.rich_text
+                    ).trim() === "..."
+                  );
+                }
+              );
+
+            if (!versionAnchor) {
+              throw new Error(
+                `Could not find the "..." version anchor on Bit "${currentTitle}".`
+              );
+            }
+
+            let highestVersion = 0;
+
+            for (
+              const block of
+              existingVersions
+            ) {
+              if (
+                block.type !== "toggle"
+              ) {
+                continue;
+              }
+
+              const text =
+                richTextToPlain(
+                  block.toggle
+                    ?.rich_text
+                ).trim();
+
+              const match =
+                text.match(
+                  /^v(\d+)\b/i
+                );
+
+              if (match) {
+                highestVersion =
+                  Math.max(
+                    highestVersion,
+                    Number(match[1])
+                  );
+              }
+            }
+
+            versionInfo = {
+              versionsBlockId:
+                versionsBlock.id,
+
+              anchorId:
+                versionAnchor.id,
+
+              nextVersion:
+                highestVersion + 1
+            };
+          }
+
+          return {
+            bitId,
             toggleId,
-            headers
-          );
 
-        const performedScript =
-          blocksToScript(toggleChildren);
-
-        /*
-         * Current canonical Bit values.
-         */
-        const currentTitle =
-          richTextToPlain(
-            bitPage.properties?.Bit?.title
-          );
-
-        const currentDuration =
-          bitPage.properties?.Duration?.number ??
-          null;
-
-        const currentScript =
-          richTextToPlain(
-            bitPage.properties?.Script?.rich_text
-          );
-
-        const lastPerformed =
-          bitPage.properties?.["Last Performed"]
-            ?.date?.start || null;
-
-        const lastPerformedSet =
-          bitPage.properties?.["Last Performed Set"]
-            ?.relation?.[0]?.id || null;
-
-        /*
-         * Compare.
-         */
-        const titleChanged =
-          currentTitle !== parsed.title;
-
-        const durationChanged =
-          currentDuration !== parsed.duration;
-
-        const scriptChanged =
-          normalizeScript(currentScript) !==
-          normalizeScript(performedScript);
-
-        const contentChanged =
-          titleChanged ||
-          durationChanged ||
-          scriptChanged;
-
-        return {
-          bit_id: bitId,
-          toggle_id: toggleId,
-
-          current: {
-            title: currentTitle,
-            duration: currentDuration,
-            script: currentScript,
-            last_performed: lastPerformed,
-            last_performed_set:
+            current: {
+              title: currentTitle,
+              duration: currentDuration,
+              script: currentScript,
+              lastPerformed,
               lastPerformedSet
-          },
+            },
 
-          performed: {
-            title: parsed.title,
-            duration: parsed.duration,
-            script: performedScript,
-            date: setDate,
-            set_id: setId
-          },
+            performed: {
+              title: parsed.title,
+              duration: parsed.duration,
+              script: performedScript
+            },
 
-          changes: {
-            title: titleChanged,
-            duration: durationChanged,
-            script: scriptChanged
-          },
+            changes: {
+              title: titleChanged,
+              duration: durationChanged,
+              script: scriptChanged
+            },
 
-          would_create_version:
             contentChanged,
-
-          would_update_bit: true
-        };
-      })
+            versionInfo
+          };
+        }
+      )
     );
 
     /*
-     * 6. VERSION WRITE TEST
+     * Everything structural has now been validated.
      *
-     * Creates historical versions for changed Bits.
-     * DOES NOT update the canonical Bit.
+     * 6. Resolve old Set names needed for
+     * version titles.
      */
-    const versionsCreated = [];
-    
     for (const item of report) {
-      if (!item.would_create_version) {
+      if (
+        !item.contentChanged ||
+        !item.current.lastPerformedSet
+      ) {
         continue;
       }
-    
-      const bitId = item.bit_id;
-    
-      /*
-       * Get the Bit page's top-level blocks and find VERSIONS.
-       */
-      const bitBlocks = await getAllBlockChildren(
-        bitId,
-        headers
-      );
-    
-      const versionsBlock = bitBlocks.find(block => {
-        if (
-          block.type !== "heading_1" &&
-          block.type !== "heading_2" &&
-          block.type !== "heading_3" &&
-          block.type !== "toggle"
-        ) {
-          return false;
-        }
-    
-        const richText =
-          block[block.type]?.rich_text || [];
-    
-        return (
-          richTextToPlain(richText)
-            .trim()
-            .toUpperCase() === "VERSIONS"
-        );
-      });
-    
-      if (!versionsBlock) {
-        return res.status(400).json({
-          error:
-            `Could not find VERSIONS on Bit "${item.current.title}".`,
-          dry_run: false
-        });
-      }
-    
-      /*
-       * Read existing versions.
-       */
-      const existingVersions =
-        await getAllBlockChildren(
-          versionsBlock.id,
-          headers
-        );
-    
-      /*
-       * Determine highest existing vN.
-       */
-      let highestVersion = 0;
-    
-      for (const block of existingVersions) {
-        if (block.type !== "toggle") {
-          continue;
-        }
-    
-        const text =
-          richTextToPlain(
-            block.toggle?.rich_text
-          ).trim();
-    
-        const match = text.match(/^v(\d+)\b/i);
-    
-        if (match) {
-          highestVersion = Math.max(
-            highestVersion,
-            Number(match[1])
-          );
-        }
-      }
-    
-      const nextVersion =
-        highestVersion + 1;
-    
-      /*
-       * Resolve the OLD Last Performed Set name.
-       */
-      let oldSetName = null;
-    
-      if (item.current.last_performed_set) {
-        const oldSetResponse = await fetch(
-          `https://api.notion.com/v1/pages/${item.current.last_performed_set}`,
+
+      const oldSetResponse =
+        await fetch(
+          `https://api.notion.com/v1/pages/${item.current.lastPerformedSet}`,
           {
             headers
           }
         );
-    
-        const oldSetPage =
-          await oldSetResponse.json();
-    
-        if (oldSetResponse.ok) {
-          oldSetName =
-            richTextToPlain(
-              oldSetPage.properties?.Set?.title
-            ) || null;
-        }
+
+      const oldSetPage =
+        await oldSetResponse.json();
+
+      if (oldSetResponse.ok) {
+        item.oldSetName =
+          richTextToPlain(
+            oldSetPage.properties
+              ?.Set?.title
+          ) || null;
+      } else {
+        item.oldSetName = null;
       }
-    
+    }
+
+    /*
+     * 7. WRITE.
+     */
+    const versionsCreated = [];
+    const bitsUpdated = [];
+
+    for (const item of report) {
       /*
-       * Build compact version title.
+       * Archive the OLD canonical version
+       * if any content changed.
        */
-      const titleParts = [
-        `v${nextVersion}`,
-        formatVersionDate(
-          item.current.last_performed
-        )
-      ];
-    
-      if (oldSetName) {
-        titleParts.push(oldSetName);
-      }
-    
-      /*
-       * Include OLD title only if title changed.
-       */
-      if (item.changes.title) {
-        titleParts.push(
-          item.current.title || "Untitled Bit"
-        );
-      }
-    
-      /*
-       * Include OLD duration only if duration changed.
-       */
-      if (item.changes.duration) {
-        const oldDuration =
-          formatDuration(
-            item.current.duration
+      if (item.contentChanged) {
+        const titleParts = [
+          `v${item.versionInfo.nextVersion}`,
+          formatVersionDate(
+            item.current.lastPerformed
+          )
+        ];
+
+        if (item.oldSetName) {
+          titleParts.push(
+            item.oldSetName
           );
-    
-        if (oldDuration) {
-          titleParts.push(oldDuration);
         }
-      }
-    
-      const versionTitle =
-        titleParts.join(" — ");
-    
-      /*
-       * Build the new version toggle.
-       */
-      const versionBlock = {
-        object: "block",
-        type: "toggle",
-        toggle: {
-          rich_text: [
-            {
-              type: "text",
-              text: {
-                content: versionTitle
+
+        /*
+         * Add old title only if title changed.
+         */
+        if (item.changes.title) {
+          titleParts.push(
+            item.current.title ||
+            "Untitled Bit"
+          );
+        }
+
+        /*
+         * Add old duration only if duration changed.
+         */
+        if (item.changes.duration) {
+          const oldDuration =
+            formatDuration(
+              item.current.duration
+            );
+
+          if (oldDuration) {
+            titleParts.push(
+              oldDuration
+            );
+          }
+        }
+
+        const versionTitle =
+          titleParts.join(" — ");
+
+        const versionBlock = {
+          object: "block",
+          type: "toggle",
+
+          toggle: {
+            rich_text: [
+              {
+                type: "text",
+                text: {
+                  content:
+                    versionTitle
+                }
               }
+            ],
+
+            children:
+              scriptToParagraphBlocks(
+                item.current.script
+              )
+          }
+        };
+
+        const versionResponse =
+          await fetch(
+            `https://api.notion.com/v1/blocks/${item.versionInfo.versionsBlockId}/children`,
+            {
+              method: "PATCH",
+              headers,
+              body: JSON.stringify({
+                children: [
+                  versionBlock
+                ],
+
+                after:
+                  item.versionInfo
+                    .anchorId
+              })
             }
-          ],
-    
-          children:
-            scriptToParagraphBlocks(
-              item.current.script
+          );
+
+        const versionData =
+          await versionResponse.json();
+
+        if (!versionResponse.ok) {
+          return res
+            .status(
+              versionResponse.status
             )
+            .json({
+              error:
+                `Could not archive the previous version of "${item.current.title}".`,
+
+              notion:
+                versionData,
+
+              partial_update:
+                versionsCreated.length >
+                0
+            });
         }
-      };
-    
+
+        versionsCreated.push({
+          bit:
+            item.current.title,
+
+          version:
+            versionTitle
+        });
+      }
+
       /*
-       * Insert newest version at the TOP of VERSIONS.
+       * Promote what was actually performed
+       * into the canonical Bit.
        *
-       * If existing versions exist, append normally first.
-       * We'll verify visual ordering in this test before
-       * making the final production implementation.
+       * This happens for EVERY Bit, even when
+       * content did not change, because performance
+       * metadata must still be updated.
        */
-      const versionResponse = await fetch(
-        `https://api.notion.com/v1/blocks/${versionsBlock.id}/children`,
+      const updateResponse =
+        await fetch(
+          `https://api.notion.com/v1/pages/${item.bitId}`,
+          {
+            method: "PATCH",
+            headers,
+            body: JSON.stringify({
+              properties: {
+                Bit: {
+                  title: [
+                    {
+                      type: "text",
+                      text: {
+                        content:
+                          item.performed
+                            .title
+                      }
+                    }
+                  ]
+                },
+
+                Duration: {
+                  number:
+                    item.performed
+                      .duration
+                },
+
+                Script: {
+                  rich_text:
+                    item.performed.script
+                      ? [
+                          {
+                            type: "text",
+                            text: {
+                              content:
+                                item
+                                  .performed
+                                  .script
+                            }
+                          }
+                        ]
+                      : []
+                },
+
+                "Last Performed": {
+                  date: {
+                    start:
+                      setDate
+                  }
+                },
+
+                "Last Performed Set": {
+                  relation: [
+                    {
+                      id: setId
+                    }
+                  ]
+                }
+              }
+            })
+          }
+        );
+
+      const updateData =
+        await updateResponse.json();
+
+      if (!updateResponse.ok) {
+        return res
+          .status(
+            updateResponse.status
+          )
+          .json({
+            error:
+              `Could not update Bit "${item.current.title}".`,
+
+            notion:
+              updateData,
+
+            partial_update: true
+          });
+      }
+
+      bitsUpdated.push({
+        before:
+          item.current.title,
+
+        after:
+          item.performed.title,
+
+        changes:
+          item.changes
+      });
+    }
+
+    /*
+     * 8. Mark operation complete.
+     *
+     * Clear Performed ONLY after every Bit
+     * has been processed successfully.
+     */
+    const clearResponse =
+      await fetch(
+        `https://api.notion.com/v1/pages/${setId}`,
         {
           method: "PATCH",
           headers,
           body: JSON.stringify({
-            children: [versionBlock]
+            properties: {
+              Performed: {
+                checkbox: false
+              }
+            }
           })
         }
       );
-    
-      const versionData =
-        await versionResponse.json();
-    
-      if (!versionResponse.ok) {
-        return res
-          .status(versionResponse.status)
-          .json(versionData);
-      }
-    
-      versionsCreated.push({
-        bit: item.current.title,
-        version: versionTitle
-      });
+
+    const clearData =
+      await clearResponse.json();
+
+    if (!clearResponse.ok) {
+      return res
+        .status(clearResponse.status)
+        .json({
+          error:
+            "Bits were updated successfully, but the Set's Performed checkbox could not be cleared.",
+
+          notion:
+            clearData,
+
+          partial_update: true
+        });
     }
 
     /*
-     * 6. Summary.
+     * 9. Success.
      */
-    const changedBits =
-      report.filter(
-        item => item.would_create_version
-      );
-
     return res.status(200).json({
       ok: true,
-      dry_run: true,
 
       set: {
         id: setId,
@@ -725,25 +935,32 @@ export default async function handler(req, res) {
       },
 
       summary: {
-        bits_checked: report.length,
+        bits_processed:
+          report.length,
+
         bits_with_content_changes:
-          changedBits.length,
-        versions_to_create:
-          changedBits.length
+          report.filter(
+            item =>
+              item.contentChanged
+          ).length,
+
+        versions_created:
+          versionsCreated.length
       },
 
-      bits: report,
+      versions_created:
+        versionsCreated,
 
-      versions_created: versionsCreated,
+      bits_updated:
+        bitsUpdated,
 
       message:
-        "VERSION WRITE TEST — historical versions were created, but canonical Bits were NOT updated."
+        `Marked "${setName}" as performed and updated ${report.length} Bit${report.length === 1 ? "" : "s"}.`
     });
 
   } catch (error) {
     return res.status(500).json({
-      error: error.message,
-      dry_run: true
+      error: error.message
     });
   }
 }
