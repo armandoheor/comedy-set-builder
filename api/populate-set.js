@@ -179,6 +179,36 @@ export default async function handler(req, res) {
 
     const setlistBlock = blocks[setlistIndex];
 
+    // Find the divider that ends the SETLIST section
+    const dividerIndex = blocks.findIndex(
+      (block, index) =>
+        index > setlistIndex &&
+        block.type === "divider"
+    );
+    
+    if (dividerIndex === -1) {
+      return res.status(400).json({
+        error: "Could not find the divider after SETLIST."
+      });
+    }
+    
+    // Check whether SETLIST already contains anything
+    const existingSetlistBlocks = blocks.slice(
+      setlistIndex + 1,
+      dividerIndex
+    );
+    
+    // Ignore the Populate Set button itself
+    const existingContent = existingSetlistBlocks.filter(
+      block => block.type !== "button"
+    );
+    
+    if (existingContent.length > 0) {
+      return res.status(409).json({
+        error: "This Set already has a populated SETLIST."
+      });
+    }
+
     /*
      * 4. Retrieve every related Bit.
      */
