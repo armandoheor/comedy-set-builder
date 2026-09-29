@@ -533,7 +533,15 @@ export default async function handler(req, res) {
 
             if (!versionAnchor) {
               throw new Error(
-                `Could not find the "..." version anchor on Bit "${currentTitle}".`
+                `Could not find anchor. VERSIONS children: ${JSON.stringify(
+                  existingVersions.map(block => ({
+                    id: block.id,
+                    type: block.type,
+                    text: richTextToPlain(
+                      block[block.type]?.rich_text || []
+                    )
+                  }))
+                )}`
               );
             }
 
