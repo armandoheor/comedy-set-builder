@@ -881,6 +881,14 @@ export default async function handler(req, res) {
      * Clear Performed ONLY after every Bit
      * has been processed successfully.
      */
+
+    const performedTotalDuration =
+      report.reduce(
+        (total, item) =>
+          total + (item.performed.duration || 0),
+        0
+      );
+    
     const clearResponse =
       await fetch(
         `https://api.notion.com/v1/pages/${setId}`,
@@ -889,6 +897,10 @@ export default async function handler(req, res) {
           headers,
           body: JSON.stringify({
             properties: {
+              Duration: {
+                number: performedTotalDuration
+              },
+            
               Performed: {
                 checkbox: false
               }
