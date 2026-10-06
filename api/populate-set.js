@@ -224,26 +224,6 @@ export default async function handler(req, res) {
       );
 
     /*
-     * Merge existing Set Bits + currently selected Bits.
-     *
-     * Select is ADDITIVE.
-     * An unselected Bit is NOT removed from the Set.
-     */
-    const bitIds = [
-      ...new Set([
-        ...existingBitIds,
-        ...selectedBitIds
-      ])
-    ];
-
-    if (!bitIds.length) {
-      return res.status(400).json({
-        error:
-          `${setName} has no related Bits and no Bits are selected.`
-      });
-    }
-
-    /*
      * 5. Read existing Bit Map.
      */
     const bitMapText =
@@ -264,6 +244,57 @@ export default async function handler(req, res) {
         });
       }
     }
+
+    /*
+     * Reconcile mapped Bits against their
+     * actual setlist toggles.
+     *
+     * If a mapped toggle was manually deleted,
+     * that Bit has been removed from the Set.
+     */
+    const removedBitIds = [];
+    
+    for (const [bitId, toggleId] of Object.entries(bitMap)) {
+      const toggleResponse = await fetch(
+        `https://api.notion.com/v1/blocks/${toggleId}`,
+        {
+          headers
+        }
+      );
+    
+      const toggle =
+        await toggleResponse.json();
+    
+      if (!toggleResponse.ok) {
+        throw new Error(
+          `Could not retrieve mapped toggle ${toggleId}`
+        );
+      }
+    
+      if (
+        toggle.archived ||
+        toggle.in_trash
+      ) {
+        removedBitIds.push(bitId);
+        delete bitMap[bitId];
+      }
+    }
+
+    /*
+     * Build the Set membership after reconciling
+     * manually deleted setlist toggles.
+     *
+     * A selected Bit is always allowed back in,
+     * even if its previous mapped toggle was deleted.
+     */
+    const bitIds = [
+      ...new Set([
+        ...existingBitIds.filter(
+          id => !removedBitIds.includes(id)
+        ),
+        ...selectedBitIds
+      ])
+    ];
 
     /*
      * Only Bits without a mapping need
@@ -690,16 +721,6 @@ export default async function handler(req, res) {
     }
 
     /*
-     * Keep warning behavior for mappings
-     * no longer present in Bits relation.
-     */
-    const removedBitIds =
-      Object.keys(bitMap).filter(
-        id =>
-          !bitIds.includes(id)
-      );
-
-    /*
      * 13. Success.
      */
     return res
@@ -711,8 +732,8 @@ export default async function handler(req, res) {
           setName,
 
         message:
-          newBits.length > 0
-            ? `Added ${newBits.length} Bit${newBits.length === 1 ? "" : "s"} to the Set.`
+          newBits.length > 0 || removedBitIds.length > 0
+            ? `Synced Setlist: added ${newBits.length}, removed ${removedBitIds.length}.`
             : "Setlist is already in sync.",
 
         selected_added_to_relation:
@@ -728,20 +749,12 @@ export default async function handler(req, res) {
             bit => bit.bit
           ),
 
+        removed:
+          removedBitIds.length,
+
         mapped:
           Object.keys(bitMap)
-            .length,
-
-        warnings:
-          removedBitIds.length > 0
-            ? [
-                `${removedBitIds.length} mapped Bit${
-                  removedBitIds.length === 1
-                    ? ""
-                    : "s"
-                } are no longer in the Set's Bits relation. Their setlist entries were left untouched.`
-              ]
-            : []
+            .length
       });
 
   } catch (error) {
