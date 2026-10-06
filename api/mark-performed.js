@@ -307,22 +307,7 @@ export default async function handler(req, res) {
     }
 
     /*
-     * 4. Validate Set relation against Bit Map.
-     */
-    const relatedBitIds =
-      set.properties?.Bits?.relation
-        ?.map(item => item.id) || [];
-
-    const mappedBitIds =
-      Object.keys(bitMap);
-
-    const unmappedRelatedBits =
-      relatedBitIds.filter(
-        id => !bitMap[id]
-      );
-
-    /*
-     * 5. READ + VALIDATE EVERYTHING FIRST.
+     * 4. READ + VALIDATE EVERYTHING FIRST.
      *
      * No writes occur in this stage.
      */
@@ -597,7 +582,7 @@ export default async function handler(req, res) {
     /*
      * Everything structural has now been validated.
      *
-     * 6. Resolve old Set names needed for
+     * 5. Resolve old Set names needed for
      * version titles.
      */
     for (const item of report) {
@@ -631,7 +616,7 @@ export default async function handler(req, res) {
     }
 
     /*
-     * 7. WRITE.
+     * 6. WRITE.
      *
      * Only surviving mapped toggles were actually performed.
      */
@@ -864,7 +849,7 @@ export default async function handler(req, res) {
     }
 
     /*
-     * 8. Mark operation complete.
+     * 7. Mark operation complete.
      *
      * Clear Performed ONLY after every Bit
      * has been processed successfully.
@@ -927,7 +912,7 @@ export default async function handler(req, res) {
     }
 
     /*
-     * 9. Success.
+     * 8. Success.
      */
     return res.status(200).json({
       ok: true,
