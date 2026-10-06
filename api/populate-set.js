@@ -242,19 +242,29 @@ export default async function handler(req, res) {
     );
 
     /*
-     * 6. Create toggles for ONLY the new Bits.
+     * 6. Create each new Bit individually.
+     *
+     * Creating one toggle at a time lets us capture the exact
+     * block ID returned by Notion and immediately store:
+     *
+     * Bit page ID -> Set toggle block ID
+     *
+     * No positional inference or re-reading is required.
      */
     if (newBits.length > 0) {
-      const children = newBits.map(bit => {
+      let insertAfterId = setlistBlock.id;
+    
+      for (const bit of newBits) {
         const duration = formatDuration(bit.duration);
-
+    
         const title = duration
           ? `${bit.bit} — ${duration}`
           : bit.bit;
-
-        const paragraphs = scriptToParagraphs(bit.script);
-
-        return {
+    
+        const paragraphs =
+          scriptToParagraphs(bit.script);
+    
+        const toggleBlock = {
           object: "block",
           type: "toggle",
           toggle: {
@@ -266,6 +276,7 @@ export default async function handler(req, res) {
                 }
               }
             ],
+    
             children: paragraphs.length
               ? paragraphs
               : [
@@ -279,68 +290,63 @@ export default async function handler(req, res) {
                 ]
           }
         };
-      });
-
-      const writeResponse = await fetch(
-        `https://api.notion.com/v1/blocks/${setId}/children`,
-        {
-          method: "PATCH",
-          headers,
-          body: JSON.stringify({
-            children,
-            after: setlistBlock.id
-          })
+    
+        /*
+         * Create exactly ONE toggle after the previously
+         * created toggle (or SETLIST for the first Bit).
+         */
+        const writeResponse = await fetch(
+          `https://api.notion.com/v1/blocks/${setId}/children`,
+          {
+            method: "PATCH",
+            headers,
+            body: JSON.stringify({
+              children: [toggleBlock],
+              after: insertAfterId
+            })
+          }
+        );
+    
+        const writeData =
+          await writeResponse.json();
+    
+        if (!writeResponse.ok) {
+          return res
+            .status(writeResponse.status)
+            .json(writeData);
         }
-      );
-
-      const writeData = await writeResponse.json();
-
-      if (!writeResponse.ok) {
-        return res.status(writeResponse.status).json(writeData);
-      }
-
-      /*
-       * Re-read the Set after creating the toggles so we can get
-       * the actual top-level toggle block IDs.
-       */
-      const refreshedResponse = await fetch(
-        `https://api.notion.com/v1/blocks/${setId}/children?page_size=100`,
-        {
-          headers
+    
+        /*
+         * Because exactly one child was appended,
+         * Notion should return exactly that created block.
+         */
+        const createdToggle =
+          writeData.results?.[0];
+    
+        if (
+          !createdToggle ||
+          createdToggle.type !== "toggle" ||
+          !createdToggle.id
+        ) {
+          return res.status(500).json({
+            error:
+              `Created setlist entry for "${bit.bit}", but Notion did not return its toggle block ID.`
+          });
         }
-      );
-      
-      const refreshedData = await refreshedResponse.json();
-      
-      if (!refreshedResponse.ok) {
-        return res.status(refreshedResponse.status).json(refreshedData);
+    
+        /*
+         * Record the exact mapping immediately.
+         */
+        bitMap[bit.id] =
+          createdToggle.id;
+    
+        /*
+         * The next Bit goes directly after this one.
+         * This preserves newBits order.
+         */
+        insertAfterId =
+          createdToggle.id;
       }
-      
-      /*
-       * Because the new toggles were inserted immediately after SETLIST,
-       * take the first N toggle blocks after SETLIST.
-       */
-      const refreshedBlocks = refreshedData.results;
-      
-      const refreshedSetlistIndex = refreshedBlocks.findIndex(
-        block => block.id === setlistBlock.id
-      );
-      
-      const createdToggles = refreshedBlocks
-        .slice(refreshedSetlistIndex + 1)
-        .filter(block => block.type === "toggle")
-        .slice(0, newBits.length);
-      
-      if (createdToggles.length !== newBits.length) {
-        return res.status(500).json({
-          error:
-            "Setlist was created, but the new toggle block IDs could not be identified."
-        });
-      }
-      
-      newBits.forEach((bit, index) => {
-        bitMap[bit.id] = createdToggles[index].id;
-      });
     }
 
     /*
