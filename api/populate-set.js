@@ -31,6 +31,28 @@ function scriptToParagraphs(script) {
     }));
 }
 
+function textToRichTextChunks(text, chunkSize = 2000) {
+  const chunks = [];
+
+  for (
+    let i = 0;
+    i < text.length;
+    i += chunkSize
+  ) {
+    chunks.push({
+      type: "text",
+      text: {
+        content: text.slice(
+          i,
+          i + chunkSize
+        )
+      }
+    });
+  }
+
+  return chunks;
+}
+
 export default async function handler(req, res) {
   const token = process.env.NOTION_TOKEN;
 
@@ -598,18 +620,10 @@ export default async function handler(req, res) {
               },
 
               "Bit Map": {
-                rich_text: [
-                  {
-                    type: "text",
-
-                    text: {
-                      content:
-                        JSON.stringify(
-                          bitMap
-                        )
-                    }
-                  }
-                ]
+                rich_text:
+                  textToRichTextChunks(
+                    JSON.stringify(bitMap)
+                  )
               },
 
               Duration: {
