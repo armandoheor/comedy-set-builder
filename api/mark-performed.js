@@ -321,27 +321,6 @@ export default async function handler(req, res) {
         id => !bitMap[id]
       );
 
-    const mappedButUnrelatedBits =
-      mappedBitIds.filter(
-        id => !relatedBitIds.includes(id)
-      );
-
-    if (
-      unmappedRelatedBits.length ||
-      mappedButUnrelatedBits.length
-    ) {
-      return res.status(409).json({
-        error:
-          "Set relation and Bit Map are not in sync. Run Sync Setlist before marking the Set performed.",
-
-        related_without_mapping:
-          unmappedRelatedBits,
-
-        mapped_without_relation:
-          mappedButUnrelatedBits
-      });
-    }
-
     /*
      * 5. READ + VALIDATE EVERYTHING FIRST.
      *
@@ -350,25 +329,6 @@ export default async function handler(req, res) {
     const report = await Promise.all(
       mappings.map(
         async ([bitId, toggleId]) => {
-          /*
-           * Canonical Bit.
-           */
-          const bitResponse = await fetch(
-            `https://api.notion.com/v1/pages/${bitId}`,
-            {
-              headers
-            }
-          );
-
-          const bitPage =
-            await bitResponse.json();
-
-          if (!bitResponse.ok) {
-            throw new Error(
-              `Could not retrieve mapped Bit ${bitId}`
-            );
-          }
-
           /*
            * Set toggle.
            */
@@ -392,14 +352,35 @@ export default async function handler(req, res) {
             toggle.archived ||
             toggle.in_trash
           ) {
-            throw new Error(
-              `Mapped toggle ${toggleId} has been deleted.`
-            );
+            return {
+              bitId,
+              toggleId,
+              performed: false
+            };
           }
 
           if (toggle.type !== "toggle") {
             throw new Error(
               `Mapped block ${toggleId} is no longer a toggle.`
+            );
+          }
+
+          /*
+           * Canonical Bit.
+           */
+          const bitResponse = await fetch(
+            `https://api.notion.com/v1/pages/${bitId}`,
+            {
+              headers
+            }
+          );
+
+          const bitPage =
+            await bitResponse.json();
+
+          if (!bitResponse.ok) {
+            throw new Error(
+              `Could not retrieve mapped Bit ${bitId}`
             );
           }
 
@@ -651,11 +632,18 @@ export default async function handler(req, res) {
 
     /*
      * 7. WRITE.
+     *
+     * Only surviving mapped toggles were actually performed.
      */
+    const performedReport =
+      report.filter(
+        item => item.performed !== false
+      );
+    
     const versionsCreated = [];
     const bitsUpdated = [];
-
-    for (const item of report) {
+    
+    for (const item of performedReport) {
       /*
        * Archive the OLD canonical version
        * if any content changed.
@@ -883,10 +871,15 @@ export default async function handler(req, res) {
      */
 
     const performedTotalDuration =
-      report.reduce(
+      performedReport.reduce(
         (total, item) =>
           total + (item.performed.duration || 0),
         0
+      );
+    
+    const performedBitIds =
+      performedReport.map(
+        item => item.bitId
       );
     
     const clearResponse =
@@ -897,6 +890,13 @@ export default async function handler(req, res) {
           headers,
           body: JSON.stringify({
             properties: {
+              Bits: {
+                relation:
+                  performedBitIds.map(id => ({
+                    id
+                  }))
+              },
+            
               Duration: {
                 number: performedTotalDuration
               },
@@ -939,15 +939,18 @@ export default async function handler(req, res) {
       },
 
       summary: {
-        bits_processed:
-          report.length,
-
+        bits_performed:
+          performedReport.length,
+      
+        bits_not_performed:
+          report.length - performedReport.length,
+      
         bits_with_content_changes:
-          report.filter(
+          performedReport.filter(
             item =>
               item.contentChanged
           ).length,
-
+      
         versions_created:
           versionsCreated.length
       },
@@ -959,7 +962,7 @@ export default async function handler(req, res) {
         bitsUpdated,
 
       message:
-        `Marked "${setName}" as performed and updated ${report.length} Bit${report.length === 1 ? "" : "s"}.`
+        `Marked "${setName}" as performed with ${performedReport.length} Bit${performedReport.length === 1 ? "" : "s"}.`
     });
 
   } catch (error) {
