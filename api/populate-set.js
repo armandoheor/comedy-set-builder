@@ -48,9 +48,9 @@ export default async function handler(req, res) {
 
   try {
     /*
-     * 1. Find the SETS data source.
+     * 1. Find SETS.
      */
-    const searchResponse = await fetch(
+    const setsSearchResponse = await fetch(
       "https://api.notion.com/v1/search",
       {
         method: "POST",
@@ -65,18 +65,24 @@ export default async function handler(req, res) {
       }
     );
 
-    const searchData = await searchResponse.json();
+    const setsSearchData =
+      await setsSearchResponse.json();
 
-    if (!searchResponse.ok) {
-      return res.status(searchResponse.status).json(searchData);
+    if (!setsSearchResponse.ok) {
+      return res
+        .status(setsSearchResponse.status)
+        .json(setsSearchData);
     }
 
-    const setsDataSource = searchData.results.find(item => {
-      const title =
-        item.title?.map(t => t.plain_text).join("") || "";
+    const setsDataSource =
+      setsSearchData.results.find(item => {
+        const title =
+          item.title
+            ?.map(t => t.plain_text)
+            .join("") || "";
 
-      return title === "SETS";
-    });
+        return title === "SETS";
+      });
 
     if (!setsDataSource) {
       return res.status(404).json({
@@ -85,9 +91,9 @@ export default async function handler(req, res) {
     }
 
     /*
-     * 2. Find the newest Set where Sync is checked.
+     * 2. Find newest Set where Sync = true.
      */
-    const queryResponse = await fetch(
+    const setQueryResponse = await fetch(
       `https://api.notion.com/v1/data_sources/${setsDataSource.id}/query`,
       {
         method: "POST",
@@ -99,30 +105,35 @@ export default async function handler(req, res) {
               equals: true
             }
           },
+
           sorts: [
             {
               timestamp: "created_time",
               direction: "descending"
             }
           ],
+
           page_size: 1
         })
       }
     );
 
-    const queryData = await queryResponse.json();
+    const setQueryData =
+      await setQueryResponse.json();
 
-    if (!queryResponse.ok) {
-      return res.status(queryResponse.status).json(queryData);
+    if (!setQueryResponse.ok) {
+      return res
+        .status(setQueryResponse.status)
+        .json(setQueryData);
     }
 
-    if (queryData.results.length === 0) {
+    if (!setQueryData.results.length) {
       return res.status(400).json({
         error: "No Set is marked for Sync."
       });
     }
 
-    const set = queryData.results[0];
+    const set = setQueryData.results[0];
     const setId = set.id;
 
     const setName =
@@ -130,18 +141,110 @@ export default async function handler(req, res) {
         ?.map(item => item.plain_text)
         .join("") || "Set";
 
-    const bitIds =
+    const existingBitIds =
       set.properties?.Bits?.relation
         ?.map(item => item.id) || [];
 
-    if (!bitIds.length) {
-      return res.status(400).json({
-        error: `${setName} has no related Bits.`
+    /*
+     * 3. Find BITS.
+     */
+    const bitsSearchResponse = await fetch(
+      "https://api.notion.com/v1/search",
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          query: "BITS",
+          filter: {
+            property: "object",
+            value: "data_source"
+          }
+        })
+      }
+    );
+
+    const bitsSearchData =
+      await bitsSearchResponse.json();
+
+    if (!bitsSearchResponse.ok) {
+      return res
+        .status(bitsSearchResponse.status)
+        .json(bitsSearchData);
+    }
+
+    const bitsDataSource =
+      bitsSearchData.results.find(item => {
+        const title =
+          item.title
+            ?.map(t => t.plain_text)
+            .join("") || "";
+
+        return title === "BITS";
+      });
+
+    if (!bitsDataSource) {
+      return res.status(404).json({
+        error: "Could not find BITS."
       });
     }
 
     /*
-     * 3. Read the existing Bit Map.
+     * 4. Find every Bit where Select = true.
+     */
+    const selectedResponse = await fetch(
+      `https://api.notion.com/v1/data_sources/${bitsDataSource.id}/query`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          filter: {
+            property: "Select",
+            checkbox: {
+              equals: true
+            }
+          },
+
+          page_size: 100
+        })
+      }
+    );
+
+    const selectedData =
+      await selectedResponse.json();
+
+    if (!selectedResponse.ok) {
+      return res
+        .status(selectedResponse.status)
+        .json(selectedData);
+    }
+
+    const selectedBitIds =
+      selectedData.results.map(
+        item => item.id
+      );
+
+    /*
+     * Merge existing Set Bits + currently selected Bits.
+     *
+     * Select is ADDITIVE.
+     * An unselected Bit is NOT removed from the Set.
+     */
+    const bitIds = [
+      ...new Set([
+        ...existingBitIds,
+        ...selectedBitIds
+      ])
+    ];
+
+    if (!bitIds.length) {
+      return res.status(400).json({
+        error:
+          `${setName} has no related Bits and no Bits are selected.`
+      });
+    }
+
+    /*
+     * 5. Read existing Bit Map.
      */
     const bitMapText =
       set.properties?.["Bit Map"]?.rich_text
@@ -152,21 +255,25 @@ export default async function handler(req, res) {
 
     if (bitMapText) {
       try {
-        bitMap = JSON.parse(bitMapText);
+        bitMap =
+          JSON.parse(bitMapText);
       } catch {
         return res.status(400).json({
-          error: "Bit Map contains invalid JSON."
+          error:
+            "Bit Map contains invalid JSON."
         });
       }
     }
 
     /*
-     * Only Bits that are not already mapped need to be added.
+     * Only Bits without a mapping need
+     * a new setlist toggle.
      */
-    const missingBitIds = bitIds.filter(id => !bitMap[id]);
+    const missingBitIds =
+      bitIds.filter(id => !bitMap[id]);
 
     /*
-     * 4. Find SETLIST.
+     * 6. Find SETLIST.
      */
     const blocksResponse = await fetch(
       `https://api.notion.com/v1/blocks/${setId}/children?page_size=100`,
@@ -175,98 +282,127 @@ export default async function handler(req, res) {
       }
     );
 
-    const blocksData = await blocksResponse.json();
+    const blocksData =
+      await blocksResponse.json();
 
     if (!blocksResponse.ok) {
-      return res.status(blocksResponse.status).json(blocksData);
+      return res
+        .status(blocksResponse.status)
+        .json(blocksData);
     }
 
-    const blocks = blocksData.results;
+    const blocks =
+      blocksData.results;
 
-    const setlistIndex = blocks.findIndex(block => {
-      if (block.type !== "heading_2") {
-        return false;
-      }
+    const setlistIndex =
+      blocks.findIndex(block => {
+        if (block.type !== "heading_2") {
+          return false;
+        }
 
-      const text =
-        block.heading_2?.rich_text
-          ?.map(item => item.plain_text)
-          .join("") || "";
+        const text =
+          block.heading_2?.rich_text
+            ?.map(item => item.plain_text)
+            .join("") || "";
 
-      return text.trim().toUpperCase() === "SETLIST";
-    });
+        return (
+          text.trim().toUpperCase() ===
+          "SETLIST"
+        );
+      });
 
     if (setlistIndex === -1) {
       return res.status(400).json({
-        error: "Could not find the SETLIST heading."
+        error:
+          "Could not find the SETLIST heading."
       });
     }
 
-    const setlistBlock = blocks[setlistIndex];
+    const setlistBlock =
+      blocks[setlistIndex];
 
     /*
-     * 5. Retrieve ONLY Bits that aren't already mapped.
+     * 7. Retrieve only Bits that need
+     * new toggles.
      */
-    const newBits = await Promise.all(
-      missingBitIds.map(async id => {
-        const response = await fetch(
-          `https://api.notion.com/v1/pages/${id}`,
-          {
-            headers
+    const newBits =
+      await Promise.all(
+        missingBitIds.map(async id => {
+          const response = await fetch(
+            `https://api.notion.com/v1/pages/${id}`,
+            {
+              headers
+            }
+          );
+
+          const page =
+            await response.json();
+
+          if (!response.ok) {
+            throw new Error(
+              `Could not retrieve Bit ${id}`
+            );
           }
-        );
 
-        const page = await response.json();
+          return {
+            id,
 
-        if (!response.ok) {
-          throw new Error(`Could not retrieve Bit ${id}`);
-        }
+            bit:
+              page.properties?.Bit?.title
+                ?.map(
+                  item =>
+                    item.plain_text
+                )
+                .join("") ||
+              "Untitled Bit",
 
-        return {
-          id,
+            duration:
+              page.properties
+                ?.Duration?.number ??
+              null,
 
-          bit:
-            page.properties?.Bit?.title
-              ?.map(item => item.plain_text)
-              .join("") || "Untitled Bit",
-
-          duration:
-            page.properties?.Duration?.number ?? null,
-
-          script:
-            page.properties?.Script?.rich_text
-              ?.map(item => item.plain_text)
-              .join("") || ""
-        };
-      })
-    );
+            script:
+              page.properties
+                ?.Script?.rich_text
+                ?.map(
+                  item =>
+                    item.plain_text
+                )
+                .join("") || ""
+          };
+        })
+      );
 
     /*
-     * 6. Create each new Bit individually.
+     * 8. Create each missing Bit toggle
+     * individually.
      *
-     * Creating one toggle at a time lets us capture the exact
-     * block ID returned by Notion and immediately store:
-     *
-     * Bit page ID -> Set toggle block ID
-     *
-     * No positional inference or re-reading is required.
+     * This is intentionally NOT batched.
+     * We use the exact block ID returned
+     * by Notion for each Bit.
      */
     if (newBits.length > 0) {
-      let insertAfterId = setlistBlock.id;
-    
+      let insertAfterId =
+        setlistBlock.id;
+
       for (const bit of newBits) {
-        const duration = formatDuration(bit.duration);
-    
-        const title = duration
-          ? `${bit.bit} — ${duration}`
-          : bit.bit;
-    
+        const duration =
+          formatDuration(bit.duration);
+
+        const title =
+          duration
+            ? `${bit.bit} — ${duration}`
+            : bit.bit;
+
         const paragraphs =
-          scriptToParagraphs(bit.script);
-    
+          scriptToParagraphs(
+            bit.script
+          );
+
         const toggleBlock = {
           object: "block",
           type: "toggle",
+
           toggle: {
             rich_text: [
               {
@@ -276,73 +412,78 @@ export default async function handler(req, res) {
                 }
               }
             ],
-    
-            children: paragraphs.length
-              ? paragraphs
-              : [
-                  {
-                    object: "block",
-                    type: "paragraph",
-                    paragraph: {
-                      rich_text: []
+
+            children:
+              paragraphs.length
+                ? paragraphs
+                : [
+                    {
+                      object: "block",
+                      type: "paragraph",
+
+                      paragraph: {
+                        rich_text: []
+                      }
                     }
-                  }
-                ]
+                  ]
           }
         };
-    
-        /*
-         * Create exactly ONE toggle after the previously
-         * created toggle (or SETLIST for the first Bit).
-         */
-        const writeResponse = await fetch(
-          `https://api.notion.com/v1/blocks/${setId}/children`,
-          {
-            method: "PATCH",
-            headers,
-            body: JSON.stringify({
-              children: [toggleBlock],
-              after: insertAfterId
-            })
-          }
-        );
-    
+
+        const writeResponse =
+          await fetch(
+            `https://api.notion.com/v1/blocks/${setId}/children`,
+            {
+              method: "PATCH",
+              headers,
+
+              body: JSON.stringify({
+                children: [
+                  toggleBlock
+                ],
+
+                after:
+                  insertAfterId
+              })
+            }
+          );
+
         const writeData =
           await writeResponse.json();
-    
+
         if (!writeResponse.ok) {
           return res
-            .status(writeResponse.status)
+            .status(
+              writeResponse.status
+            )
             .json(writeData);
         }
-    
-        /*
-         * Because exactly one child was appended,
-         * Notion should return exactly that created block.
-         */
+
         const createdToggle =
           writeData.results?.[0];
-    
+
         if (
           !createdToggle ||
-          createdToggle.type !== "toggle" ||
+          createdToggle.type !==
+            "toggle" ||
           !createdToggle.id
         ) {
-          return res.status(500).json({
-            error:
-              `Created setlist entry for "${bit.bit}", but Notion did not return its toggle block ID.`
-          });
+          return res
+            .status(500)
+            .json({
+              error:
+                `Created setlist entry for "${bit.bit}", but Notion did not return its toggle block ID.`
+            });
         }
-    
+
         /*
-         * Record the exact mapping immediately.
+         * Exact Bit -> toggle mapping.
          */
         bitMap[bit.id] =
           createdToggle.id;
-    
+
         /*
-         * The next Bit goes directly after this one.
-         * This preserves newBits order.
+         * Next new Bit goes after this
+         * newly-created Bit.
          */
         insertAfterId =
           createdToggle.id;
@@ -350,118 +491,258 @@ export default async function handler(req, res) {
     }
 
     /*
-     * 7. Calculate Duration from ALL related Bits.
-     *
-     * Existing mapped Bits must also be retrieved for this because Duration
-     * represents the complete Set, not only newly added Bits.
+     * 9. Retrieve all Bits now belonging
+     * to the Set and calculate Duration.
      */
-    const allBits = await Promise.all(
-      bitIds.map(async id => {
-        const response = await fetch(
-          `https://api.notion.com/v1/pages/${id}`,
-          {
-            headers
+    const allBits =
+      await Promise.all(
+        bitIds.map(async id => {
+          const response = await fetch(
+            `https://api.notion.com/v1/pages/${id}`,
+            {
+              headers
+            }
+          );
+
+          const page =
+            await response.json();
+
+          if (!response.ok) {
+            throw new Error(
+              `Could not retrieve Bit ${id}`
+            );
           }
-        );
 
-        const page = await response.json();
+          return {
+            id,
 
-        if (!response.ok) {
-          throw new Error(`Could not retrieve Bit ${id}`);
-        }
+            bit:
+              page.properties?.Bit?.title
+                ?.map(
+                  item =>
+                    item.plain_text
+                )
+                .join("") ||
+              "Untitled Bit",
 
-        return {
-          id,
+            duration:
+              page.properties
+                ?.Duration?.number ??
+              null
+          };
+        })
+      );
 
-          bit:
-            page.properties?.Bit?.title
-              ?.map(item => item.plain_text)
-              .join("") || "Untitled Bit",
-
-          duration:
-            page.properties?.Duration?.number ?? null
-        };
-      })
-    );
-
-    const totalDuration = allBits.reduce(
-      (total, bit) => total + (bit.duration || 0),
-      0
-    );
+    const totalDuration =
+      allBits.reduce(
+        (total, bit) =>
+          total +
+          (bit.duration || 0),
+        0
+      );
 
     /*
-     * 8. Save Bit Map + Duration + clear Sync
-     * in ONE Set update.
+     * 10. Save:
+     *
+     * - merged Bits relation
+     * - Bit Map
+     * - Duration
+     *
+     * Do NOT clear Sync yet.
      */
-    const metadataResponse = await fetch(
-      `https://api.notion.com/v1/pages/${setId}`,
-      {
-        method: "PATCH",
-        headers,
-        body: JSON.stringify({
-          properties: {
-            "Bit Map": {
-              rich_text: [
-                {
-                  type: "text",
-                  text: {
-                    content: JSON.stringify(bitMap)
+    const metadataResponse =
+      await fetch(
+        `https://api.notion.com/v1/pages/${setId}`,
+        {
+          method: "PATCH",
+          headers,
+
+          body: JSON.stringify({
+            properties: {
+              Bits: {
+                relation:
+                  bitIds.map(id => ({
+                    id
+                  }))
+              },
+
+              "Bit Map": {
+                rich_text: [
+                  {
+                    type: "text",
+
+                    text: {
+                      content:
+                        JSON.stringify(
+                          bitMap
+                        )
+                    }
                   }
-                }
-              ]
-            },
+                ]
+              },
 
-            Duration: {
-              number: totalDuration
-            },
-
-            Sync: {
-              checkbox: false
+              Duration: {
+                number:
+                  totalDuration
+              }
             }
-          }
-        })
-      }
-    );
+          })
+        }
+      );
 
-    const metadataData = await metadataResponse.json();
+    const metadataData =
+      await metadataResponse.json();
 
     if (!metadataResponse.ok) {
-      return res.status(metadataResponse.status).json(metadataData);
+      return res
+        .status(
+          metadataResponse.status
+        )
+        .json(metadataData);
     }
 
     /*
-     * 9. Report mapped Bits that are no longer related to the Set.
+     * 11. Set update succeeded.
      *
-     * Do NOT delete them or their toggles.
+     * Clear Select on every Bit that
+     * participated in this Sync.
      */
-    const removedBitIds =
-      Object.keys(bitMap).filter(id => !bitIds.includes(id));
+    for (
+      const selectedBitId of
+      selectedBitIds
+    ) {
+      const clearSelectResponse =
+        await fetch(
+          `https://api.notion.com/v1/pages/${selectedBitId}`,
+          {
+            method: "PATCH",
+            headers,
+
+            body: JSON.stringify({
+              properties: {
+                Select: {
+                  checkbox: false
+                }
+              }
+            })
+          }
+        );
+
+      const clearSelectData =
+        await clearSelectResponse.json();
+
+      if (!clearSelectResponse.ok) {
+        return res
+          .status(
+            clearSelectResponse.status
+          )
+          .json({
+            error:
+              `Set was synced, but Select could not be cleared for Bit ${selectedBitId}.`,
+
+            notion:
+              clearSelectData,
+
+            partial_update: true
+          });
+      }
+    }
 
     /*
-     * 10. Success.
+     * 12. Everything succeeded.
+     *
+     * Clear Sync LAST.
      */
-    return res.status(200).json({
-      ok: true,
-      set: setName,
+    const clearSyncResponse =
+      await fetch(
+        `https://api.notion.com/v1/pages/${setId}`,
+        {
+          method: "PATCH",
+          headers,
 
-      message:
-        newBits.length > 0
-          ? `Added ${newBits.length} Bit${newBits.length === 1 ? "" : "s"} to the Set.`
-          : "Setlist is already in sync.",
+          body: JSON.stringify({
+            properties: {
+              Sync: {
+                checkbox: false
+              }
+            }
+          })
+        }
+      );
 
-      added: newBits.map(bit => bit.bit),
+    const clearSyncData =
+      await clearSyncResponse.json();
 
-      mapped: Object.keys(bitMap).length,
+    if (!clearSyncResponse.ok) {
+      return res
+        .status(
+          clearSyncResponse.status
+        )
+        .json({
+          error:
+            "Set was synced and selected Bits were cleared, but the Set's Sync checkbox could not be cleared.",
 
-      warnings:
-        removedBitIds.length > 0
-          ? [
-              `${removedBitIds.length} mapped Bit${
-                removedBitIds.length === 1 ? "" : "s"
-              } are no longer in the Set's Bits relation. Their setlist entries were left untouched.`
-            ]
-          : []
-    });
+          notion:
+            clearSyncData,
+
+          partial_update: true
+        });
+    }
+
+    /*
+     * Keep warning behavior for mappings
+     * no longer present in Bits relation.
+     */
+    const removedBitIds =
+      Object.keys(bitMap).filter(
+        id =>
+          !bitIds.includes(id)
+      );
+
+    /*
+     * 13. Success.
+     */
+    return res
+      .status(200)
+      .json({
+        ok: true,
+
+        set:
+          setName,
+
+        message:
+          newBits.length > 0
+            ? `Added ${newBits.length} Bit${newBits.length === 1 ? "" : "s"} to the Set.`
+            : "Setlist is already in sync.",
+
+        selected_added_to_relation:
+          selectedBitIds.filter(
+            id =>
+              !existingBitIds.includes(
+                id
+              )
+          ).length,
+
+        added:
+          newBits.map(
+            bit => bit.bit
+          ),
+
+        mapped:
+          Object.keys(bitMap)
+            .length,
+
+        warnings:
+          removedBitIds.length > 0
+            ? [
+                `${removedBitIds.length} mapped Bit${
+                  removedBitIds.length === 1
+                    ? ""
+                    : "s"
+                } are no longer in the Set's Bits relation. Their setlist entries were left untouched.`
+              ]
+            : []
+      });
 
   } catch (error) {
     return res.status(500).json({
