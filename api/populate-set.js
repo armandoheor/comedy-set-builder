@@ -326,9 +326,7 @@ export default async function handler(req, res) {
      */
     const bitIds = [
       ...new Set([
-        ...existingBitIds.filter(
-          id => !removedBitIds.includes(id)
-        ),
+        ...Object.keys(bitMap),
         ...selectedBitIds
       ])
     ];
