@@ -9,8 +9,8 @@ function formatDuration(minutes) {
 }
 
 function parseToggleDuration(text) {
-  const match = (text || "").trim().match(
-    /\s+—\s+(\d+):(\d{1,2})$/
+  const match = (text || "").match(
+    /\s+—\s+(\d+):(\d{1,2})(?=\s|$)/
   );
 
   if (!match) return null;
@@ -602,12 +602,10 @@ export default async function handler(req, res) {
           .join("");
     
       const duration = parseToggleDuration(title);
-    
+
       if (duration !== null) {
         totalSeconds += Math.round(duration * 60);
       }
-    
-      totalSeconds += Math.round(duration * 60);
     }
     
     const totalDuration = totalSeconds / 60;
