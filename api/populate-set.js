@@ -8,6 +8,21 @@ function formatDuration(minutes) {
   return `${mins}:${String(secs).padStart(2, "0")}`;
 }
 
+function parseToggleDuration(text) {
+  const match = (text || "").trim().match(
+    /\s+—\s+(\d+):(\d{1,2})$/
+  );
+
+  if (!match) return null;
+
+  const minutes = Number(match[1]);
+  const seconds = Number(match[2]);
+
+  if (seconds >= 60) return null;
+
+  return minutes + seconds / 60;
+}
+
 function scriptToParagraphs(script) {
   if (!script) return [];
 
@@ -544,55 +559,58 @@ export default async function handler(req, res) {
     }
 
     /*
-     * 9. Retrieve all Bits now belonging
-     * to the Set and calculate Duration.
+     * 9. Calculate Duration from the actual
+     * surviving setlist toggles.
      */
-    const allBits =
-      await Promise.all(
-        bitIds.map(async id => {
-          const response = await fetch(
-            `https://api.notion.com/v1/pages/${id}`,
-            {
-              headers
-            }
-          );
-
-          const page =
-            await response.json();
-
-          if (!response.ok) {
-            throw new Error(
-              `Could not retrieve Bit ${id}`
-            );
-          }
-
-          return {
-            id,
-
-            bit:
-              page.properties?.Bit?.title
-                ?.map(
-                  item =>
-                    item.plain_text
-                )
-                .join("") ||
-              "Untitled Bit",
-
-            duration:
-              page.properties
-                ?.Duration?.number ??
-              null
-          };
-        })
+    let totalSeconds = 0;
+    
+    for (const bitId of bitIds) {
+      const toggleId = bitMap[bitId];
+    
+      if (!toggleId) {
+        throw new Error(
+          `No setlist toggle mapped for Bit ${bitId}`
+        );
+      }
+    
+      const response = await fetch(
+        `https://api.notion.com/v1/blocks/${toggleId}`,
+        { headers }
       );
-
-    const totalDuration =
-      allBits.reduce(
-        (total, bit) =>
-          total +
-          (bit.duration || 0),
-        0
-      );
+    
+      const toggle = await response.json();
+    
+      if (!response.ok) {
+        throw new Error(
+          `Could not retrieve toggle ${toggleId}`
+        );
+      }
+    
+      if (
+        toggle.archived ||
+        toggle.in_trash ||
+        toggle.type !== "toggle"
+      ) {
+        throw new Error(
+          `Invalid setlist toggle ${toggleId}`
+        );
+      }
+    
+      const title =
+        (toggle.toggle?.rich_text || [])
+          .map(item => item.plain_text || "")
+          .join("");
+    
+      const duration = parseToggleDuration(title);
+    
+      if (duration !== null) {
+        totalSeconds += Math.round(duration * 60);
+      }
+    
+      totalSeconds += Math.round(duration * 60);
+    }
+    
+    const totalDuration = totalSeconds / 60;
 
     /*
      * 10. Save:
