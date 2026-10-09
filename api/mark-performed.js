@@ -13,36 +13,26 @@ function normalizeScript(text) {
 function parseToggleTitle(text) {
   const value = (text || "").trim();
 
-  const match =
-    value.match(/^(.*?)(?:\s+—\s+(\d+):(\d{1,2}))?$/);
+  const match = value.match(
+    /^(.*?)\s+—\s+(\d+):(\d{1,2})(?=\s|$)/
+  );
 
-  if (!match) return null;
+  if (!match) {
+    return {
+      title: value,
+      duration: null
+    };
+  }
 
   const title = match[1].trim();
+  const minutes = Number(match[2]);
+  const seconds = Number(match[3]);
 
-  if (!title) return null;
-
-  let duration = null;
-
-  if (match[2] != null) {
-    const minutes = Number(match[2]);
-    const seconds = Number(match[3]);
-
-    if (
-      !Number.isFinite(minutes) ||
-      !Number.isFinite(seconds) ||
-      seconds < 0 ||
-      seconds >= 60
-    ) {
-      return null;
-    }
-
-    duration = minutes + seconds / 60;
-  }
+  if (!title || seconds >= 60) return null;
 
   return {
     title,
-    duration
+    duration: minutes + seconds / 60
   };
 }
 
